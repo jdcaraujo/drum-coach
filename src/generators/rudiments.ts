@@ -33,7 +33,8 @@ export function rudiments(): Exercise[] {
       nameKey: `rud.${r.key}`,
       subdivision: r.subdivision,
       steps: accentAt(parseSticking(r.sticking), r.accents),
-      startBpm: r.subdivision === 4 ? 60 : 70,
+      // Slow enough to start clean: first export showed 60 BPM 16ths was too fast
+      startBpm: r.subdivision === 4 ? 40 : 50,
       targetBpm: r.subdivision === 4 ? 120 : 150,
     }),
   )
@@ -93,7 +94,7 @@ export function orchestrated(): Exercise[] {
           voiceKey: `voice.${voice}`,
           subdivision: r.subdivision,
           steps: mergeSteps(hands, footLayer(voice, hands, r.subdivision)),
-          startBpm: 50,
+          startBpm: 40,
           targetBpm: 110,
         }),
       )

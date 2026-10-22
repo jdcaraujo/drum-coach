@@ -42,8 +42,10 @@ export class Metronome {
   private timer: number | null = null
   private opts: MetronomeOptions | null = null
   private nextN = 0
-  /** Time of step 0 (first step after the count-in) */
+  /** Anchor for step timing; moves when the tempo changes mid-play */
   playStart = 0
+  /** Audio time of the first beat after the count-in; never moves */
+  firstBeat = 0
   stepDur = 0
   /** Every step scheduled so far, for the UI playhead and timing analysis */
   readonly scheduled: ScheduledStep[] = []
@@ -70,6 +72,7 @@ export class Metronome {
       click(this.ctx, this.out, t0 + b * beat, b === 0 ? 'down' : 'beat', opts.volume)
     }
     this.playStart = t0 + exercise.beatsPerBar * beat
+    this.firstBeat = this.playStart
     this.nextN = 0
     this.scheduled.length = 0
     this.timer = window.setInterval(() => this.tick(), TICK_MS)

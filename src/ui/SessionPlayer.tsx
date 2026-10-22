@@ -4,9 +4,10 @@ import { db } from '../db/dexie'
 import { exerciseById } from '../generators'
 import { Metronome } from '../audio/metronome'
 import { MicListener } from '../audio/mic'
-import { analyze, groupNotes, matchWindow, nearestOffsetMs } from '../audio/timingAnalysis'
+import { analyze, groupNotes, isReliable, matchWindow, nearestOffsetMs } from '../audio/timingAnalysis'
 import { track, setTelemetrySession } from '../telemetry'
 import { newCard, rate } from '../srs/scheduler'
+import { tempoPlayedLongest } from '../srs/tempo'
 import type { PlanItem } from '../srs/planner'
 import type { BpmChange, RatingName, TimingSummary } from '../model/card'
 import { HANDS } from '../model/exercise'
@@ -29,7 +30,12 @@ export function SessionPlayer({ plan, source, onExit }: Props) {
   const [queue, setQueue] = useState<PlanItem[]>(plan)
   const [idx, setIdx] = useState(0)
   const [phase, setPhase] = useState<Phase>('ready')
-  const [bpm, setBpm] = useState(plan[0]?.bpm ?? 60)
+  const [bpm, setBpmState] = useState(plan[0]?.bpm ?? 60)
+  const bpmRef = useRef(bpm)
+  const setBpm = (v: number) => {
+    bpmRef.current = v
+    setBpmState(v)
+  }
   const [guide, setGuide] = useState(settings.guide)
   const [micOn, setMicOn] = useState(settings.micEnabled)
   const [micError, setMicError] = useState<string | null>(null)
@@ -206,14 +212,14 @@ export function SessionPlayer({ plan, source, onExit }: Props) {
     stopAll()
     const played = m.scheduled.filter((s) => s.n >= 0 && s.time <= stopTime)
     attempt.current.stopAt = Date.now()
-    attempt.current.playedSec = Math.round(Math.max(0, stopTime - m.playStart) * 10) / 10
+    attempt.current.playedSec = Math.round(Math.max(0, stopTime - m.firstBeat) * 10) / 10
     attempt.current.loops = ex ? Math.floor(played.length / ex.steps.length) : 0
     let summary: TimingSummary | null = null
     if (micOn && ex) {
       const notes = played
         .filter((s) => s.time <= stopTime - 0.05)
         .filter((s) => ex.steps[s.index].some((h) => HANDS.includes(h.limb)))
-      const hits = onsets.current.filter((o) => o >= m.playStart - 0.1)
+      const hits = onsets.current.filter((o) => o >= m.firstBeat - 0.1)
       if (notes.length >= 4) {
         const window = matchWindow(m.stepDur)
         const result = analyze(
@@ -259,11 +265,14 @@ export function SessionPlayer({ plan, source, onExit }: Props) {
   }
 
   function changeBpm(delta: number) {
-    const v = Math.max(30, Math.min(260, bpm + delta))
+    // Read from the ref: two quick taps can land before React re-renders
+    const from = bpmRef.current
+    const v = Math.max(30, Math.min(260, from + delta))
+    bpmRef.current = v
     const m = metro.current
     const atSec =
-      phase === 'playing' && m ? Math.round((m.ctx.currentTime - m.playStart) * 10) / 10 : null
-    const change: BpmChange = { atSec, from: bpm, to: v }
+      phase === 'playing' && m ? Math.round((m.ctx.currentTime - m.firstBeat) * 10) / 10 : null
+    const change: BpmChange = { atSec, from, to: v }
     attempt.current.bpmChanges.push(change)
     track('bpm_change', { ...change, phase }, ex?.id)
     setBpm(v)
@@ -274,24 +283,24 @@ export function SessionPlayer({ plan, source, onExit }: Props) {
     if (!ex || !item) return
     const now = new Date()
     const durationSec = Math.round(metro.current ? metro.current.ctx.currentTime - startedAt.current : 0)
-    const isWarmupOnly = item.mode === 'warmup' && !card
-    if (!isWarmupOnly) {
-      const updated = rate(card ?? newCard(ex, now), ex, r, bpm, item.mode, now)
-      await putCard(updated)
-      setLastResult(item.mode === 'warmup' ? null : { title: exerciseTitle(ex, t), bpm: updated.bpm })
-      // A breakdown comes back once more at the end of today's session
-      if (r === 'again' && item.mode !== 'warmup' && !requeued.current.has(ex.id)) {
-        requeued.current.add(ex.id)
-        setQueue((q) => [...q, { exerciseId: ex.id, mode: 'review', bpm: updated.bpm }])
-      }
-    }
     const a = attempt.current
+    const ratedBpm = tempoPlayedLongest(a.startBpm, a.bpmChanges, a.playedSec)
+    // Warm-ups count too: a warm-up on an exercise you haven't started starts it
+    const updated = rate(card ?? newCard(ex, now), ex, r, ratedBpm, item.mode, now)
+    await putCard(updated)
+    setLastResult({ title: exerciseTitle(ex, t), bpm: updated.bpm })
+    // A breakdown comes back once more at the end of today's session
+    if (r === 'again' && item.mode !== 'warmup' && !requeued.current.has(ex.id)) {
+      requeued.current.add(ex.id)
+      setQueue((q) => [...q, { exerciseId: ex.id, mode: 'review', bpm: updated.bpm }])
+    }
     const decideSec = Math.round((now.getTime() - a.stopAt) / 100) / 10
     await db.reviews.add({
       cardId: ex.id,
       at: now.getTime(),
       rating: r,
-      bpm,
+      bpm: ratedBpm,
+      stopBpm: bpm,
       mode: item.mode,
       durationSec,
       timing: timing ?? undefined,
@@ -308,7 +317,7 @@ export function SessionPlayer({ plan, source, onExit }: Props) {
       revealed,
       queueIndex: idx,
     })
-    track('rate', { rating: r, bpm, mode: item.mode, decideSec, requeued: r === 'again' && item.mode !== 'warmup' }, ex.id)
+    track('rate', { rating: r, bpm: ratedBpm, stopBpm: bpm, mode: item.mode, decideSec, requeued: r === 'again' && item.mode !== 'warmup' }, ex.id)
     advance(done + 1)
   }
 
@@ -372,6 +381,10 @@ export function SessionPlayer({ plan, source, onExit }: Props) {
   }
 
   const subtitle = exerciseSubtitle(ex, t)
+  const ratedPreview =
+    phase === 'rate'
+      ? tempoPlayedLongest(attempt.current.startBpm, attempt.current.bpmChanges, attempt.current.playedSec)
+      : bpm
   const modeHint = t(`mode.${item.mode}.hint` as Parameters<typeof t>[0])
 
   return (
@@ -416,15 +429,31 @@ export function SessionPlayer({ plan, source, onExit }: Props) {
       {micOn && (phase === 'playing' || phase === 'rate') && (
         <section className="timing">
           <TimingStrip offsets={live} />
-          {timing && (
+          {timing && isReliable(timing) && (
             <p className="small mono">
               {t('player.timing', { mean: timing.meanMs, sd: timing.sdMs, missed: timing.missed, extra: timing.extra })}
             </p>
+          )}
+          {timing && !isReliable(timing) && (
+            <div className="mic-warning small">
+              <p>
+                ⚠{' '}
+                {timing.matched / Math.max(1, timing.matched + timing.missed) < 0.8
+                  ? t('player.micUnreliable', {
+                      pct: Math.round((timing.matched / Math.max(1, timing.matched + timing.missed)) * 100),
+                    })
+                  : t('player.micNoisy', { n: timing.extra })}
+              </p>
+              <p className="muted">{t('player.micFix')}</p>
+            </div>
           )}
           {ex.steps.some((s) => s.some((h) => !HANDS.includes(h.limb))) && (
             <p className="muted small">{t('player.micHands')}</p>
           )}
         </section>
+      )}
+      {micOn && phase === 'ready' && settings.latencyMs === null && (
+        <p className="mic-warning small">⚠ {t('player.micUncalibrated')}</p>
       )}
       {micError && <p className="error small">{t('player.micError', { msg: micError })}</p>}
 
@@ -490,6 +519,9 @@ export function SessionPlayer({ plan, source, onExit }: Props) {
       {phase === 'rate' && (
         <section className="rating">
           <p className="center">{t('player.rate')}</p>
+          {ratedPreview !== bpm && (
+            <p className="center muted small">{t('player.ratedAt', { n: ratedPreview })}</p>
+          )}
           <div className="rating-row">
             {RATINGS.map((r) => (
               <button key={r} className={`btn rate rate-${r}`} onClick={() => onRate(r)}>

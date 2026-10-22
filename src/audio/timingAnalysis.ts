@@ -43,6 +43,16 @@ export function analyze(expected: number[], onsets: number[], window: number): {
   return { offsetsMs, perNote, summary: summarize(offsetsMs, missed, used.filter((u) => !u).length) }
 }
 
+/** Share of notes the mic must catch (and max share of stray sounds) to trust the timing numbers. */
+export const RELIABLE_MIN_CAUGHT = 0.8
+export const RELIABLE_MAX_EXTRA = 0.2
+
+export function isReliable(s: Pick<TimingSummary, 'matched' | 'missed' | 'extra'>): boolean {
+  const expected = s.matched + s.missed
+  if (expected === 0) return false
+  return s.matched / expected >= RELIABLE_MIN_CAUGHT && s.extra / expected <= RELIABLE_MAX_EXTRA
+}
+
 export function summarize(offsetsMs: number[], missed: number, extra: number): TimingSummary {
   const n = offsetsMs.length
   const mean = n ? offsetsMs.reduce((a, b) => a + b, 0) / n : 0

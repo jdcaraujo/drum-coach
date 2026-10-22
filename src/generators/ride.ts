@@ -27,7 +27,7 @@ export function rideFeet(): Exercise[] {
             layerAt(N, 'LF', lf, true),
             layerAt(N, 'RF', rf),
           ),
-          startBpm: 70,
+          startBpm: 60,
           targetBpm: 180,
         }),
       )
@@ -54,7 +54,7 @@ export function rideLH(): Exercise[] {
         layerAt(N, 'RF', [0, 3, 6, 9]),
         layerAt(N, 'LF', [3, 9], true),
       ),
-      startBpm: 70,
+      startBpm: 60,
       targetBpm: 160,
     }),
   )

@@ -27,6 +27,7 @@ export type EventType =
   | 'toggle'
   | 'reveal'
   | 'mic_error'
+  | 'mic_test'
   | 'rate'
   | 'export'
   | 'import'

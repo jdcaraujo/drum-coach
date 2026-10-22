@@ -4,6 +4,7 @@ import { exportAll, importAll } from '../db/dexie'
 import { calibrate } from '../audio/calibration'
 import type { CalibrationMethod } from '../audio/calibration'
 import { track, deviceInfo, BUILD } from '../telemetry'
+import { MicTest } from './MicTest'
 
 export function Settings() {
   const { t, settings, updateSettings, refresh } = useApp()
@@ -137,6 +138,7 @@ export function Settings() {
             onChange={(e) => updateSettings({ micSensitivity: Number(e.target.value) })}
           />
         </label>
+        <MicTest />
         <p className="small">
           {settings.latencyMs !== null ? t('set.latency', { n: settings.latencyMs }) : t('set.latencyNone')}
         </p>

@@ -47,8 +47,9 @@ export function nextBpm(ex: Exercise, playedBpm: number, rating: RatingName): nu
 }
 
 /**
- * Apply a self-rating. Warm-ups only move the tempo marker; everything else
- * also goes through FSRS so the card's next due date reflects how it went.
+ * Apply a self-rating. Warm-ups don't touch FSRS scheduling, but a warm-up
+ * that breaks down (Again) or struggles (Hard) still lowers the next tempo,
+ * and a clean one still counts toward the best clean tempo.
  */
 export function rate(
   card: CardRecord,
@@ -64,7 +65,12 @@ export function rate(
     lastPracticedAt: now.getTime(),
     bestCleanBpm: clean ? Math.max(card.bestCleanBpm, playedBpm) : card.bestCleanBpm,
   }
-  if (mode === 'warmup') return updated
+  if (mode === 'warmup') {
+    if (rating === 'again' || rating === 'hard') {
+      updated.bpm = Math.min(card.bpm, nextBpm(ex, playedBpm, 'again'))
+    }
+    return updated
+  }
   updated.bpm = nextBpm(ex, playedBpm, rating)
   updated.lastRating = rating
   updated.fsrs = scheduler.next(card.fsrs, now, GRADE[rating]).card

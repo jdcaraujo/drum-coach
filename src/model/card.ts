@@ -64,7 +64,10 @@ export interface ReviewRecord {
   cardId: string
   at: number
   rating: RatingName
+  /** Tempo the rating applies to: the one played longest */
   bpm: number
+  /** Tempo on the dial when Stop was pressed */
+  stopBpm?: number
   mode: Mode
   /** Seconds from pressing Start to rating */
   durationSec: number

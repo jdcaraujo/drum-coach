@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyze, groupNotes, matchWindow, median, nearestOffsetMs } from '../src/audio/timingAnalysis'
+import { analyze, groupNotes, isReliable, matchWindow, median, nearestOffsetMs } from '../src/audio/timingAnalysis'
 
 describe('timing analysis', () => {
   const step = 0.125 // 16ths at 120 BPM
@@ -55,5 +55,16 @@ describe('per-note grouping', () => {
       { key: 2, hits: 4, missed: 0, meanMs: 10 },
       { key: 3, hits: 0, missed: 4, meanMs: 0 },
     ])
+  })
+})
+
+describe('reliability', () => {
+  it('flags your first export attempt as unreliable', () => {
+    expect(isReliable({ matched: 263, missed: 234, extra: 67 })).toBe(false)
+  })
+  it('accepts a mostly caught attempt', () => {
+    expect(isReliable({ matched: 90, missed: 10, extra: 5 })).toBe(true)
+    expect(isReliable({ matched: 90, missed: 10, extra: 30 })).toBe(false)
+    expect(isReliable({ matched: 0, missed: 0, extra: 0 })).toBe(false)
   })
 })

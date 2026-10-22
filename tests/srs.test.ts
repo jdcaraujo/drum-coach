@@ -16,7 +16,8 @@ describe('tempo ladder', () => {
     expect(nextBpm(ex, 80, 'easy')).toBe(88)
     expect(nextBpm(ex, 80, 'hard')).toBe(80)
     expect(nextBpm(ex, 80, 'again')).toBe(74)
-    expect(nextBpm(ex, 40, 'again')).toBe(36)
+    expect(nextBpm(ex, 40, 'again')).toBe(34)
+    expect(nextBpm(ex, 30, 'again')).toBe(30)
     expect(nextBpm(ex, 150, 'easy')).toBe(150)
   })
 
@@ -28,11 +29,13 @@ describe('tempo ladder', () => {
     expect(isDue(c, now)).toBe(false)
   })
 
-  it('warm-up does not touch scheduling', () => {
-    const before = newCard(ex, now)
+  it('warm-up does not touch scheduling but a breakdown lowers the tempo', () => {
+    const before = { ...newCard(ex, now), bpm: 50 }
     const after = rate(before, ex, 'again', 50, 'warmup', now)
     expect(after.fsrs).toEqual(before.fsrs)
-    expect(after.bpm).toBe(before.bpm)
+    expect(after.bpm).toBe(44)
+    expect(rate(before, ex, 'good', 40, 'warmup', now).bpm).toBe(50)
+    expect(rate(before, ex, 'good', 40, 'warmup', now).bestCleanBpm).toBe(40)
   })
 })
 

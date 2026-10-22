@@ -1,4 +1,5 @@
 import type { ReviewRecord } from '../model/card'
+import { isReliable } from '../audio/timingAnalysis'
 
 const DAY = 24 * 3600 * 1000
 
@@ -45,7 +46,8 @@ export function minutesByWeek(reviews: ReviewRecord[], weeks: number, now = Date
 export function timingByDay(reviews: ReviewRecord[]) {
   const map = new Map<string, { at: number; sum: number; n: number }>()
   for (const r of reviews) {
-    if (!r.timing || r.timing.matched < 4) continue
+    // Attempts where the mic missed or invented too many notes would only add noise
+    if (!r.timing || r.timing.matched < 4 || !isReliable(r.timing)) continue
     const k = dayKey(r.at)
     const e = map.get(k) ?? { at: r.at, sum: 0, n: 0 }
     e.sum += r.timing.meanAbsMs * r.timing.matched

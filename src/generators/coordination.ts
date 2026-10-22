@@ -36,7 +36,7 @@ export function melodic(): Exercise[] {
           label: stepsLabel(steps, 4),
           subdivision: 2,
           steps,
-          startBpm: 70,
+          startBpm: 56,
           targetBpm: 160,
         }),
       )
@@ -54,7 +54,7 @@ export function melodic(): Exercise[] {
           label: stepsLabel(steps, 3),
           subdivision: 3,
           steps,
-          startBpm: 60,
+          startBpm: 50,
           targetBpm: 140,
         }),
       )
@@ -96,7 +96,7 @@ export function twoPart(): Exercise[] {
         voiceKey: `rel.${rel}`,
         subdivision: 2,
         steps: handsAndFeet(hands, feet),
-        startBpm: 60,
+        startBpm: 50,
         targetBpm: 150,
       }),
     )
@@ -117,7 +117,7 @@ export function twoPart(): Exercise[] {
           voiceKey: `rel.${rel}`,
           subdivision: 3,
           steps: handsAndFeet(hands, feet),
-          startBpm: 55,
+          startBpm: 45,
           targetBpm: 130,
         }),
       )
@@ -156,7 +156,7 @@ export function fourWayBuild(): Exercise[] {
           label: limbs.join(' → '),
           subdivision: sub,
           steps,
-          startBpm: 60,
+          startBpm: 50,
           targetBpm: 140,
         }),
       )
@@ -182,7 +182,7 @@ export function fourWay(): Exercise[] {
         label: `H ${spaced(h, 4)} · F ${spaced(f, 4)}`,
         subdivision: 2,
         steps: handsAndFeet(h, f),
-        startBpm: 60,
+        startBpm: 50,
         targetBpm: 140,
       }),
     )
@@ -202,7 +202,7 @@ export function fourWay(): Exercise[] {
         label: `H ${spaced(h, 3)} · F ${spaced(f, 3)}`,
         subdivision: 3,
         steps: handsAndFeet(h, f),
-        startBpm: 50,
+        startBpm: 40,
         targetBpm: 120,
       }),
     )
