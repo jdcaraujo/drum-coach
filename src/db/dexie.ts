@@ -1,6 +1,7 @@
 import Dexie from 'dexie'
 import type { Table } from 'dexie'
 import type { CardRecord, ReviewRecord, SessionRecord } from '../model/card'
+import type { EventRecord } from '../telemetry'
 
 export interface Settings {
   lang: 'en' | 'pt'
@@ -34,6 +35,7 @@ class DrumDb extends Dexie {
   reviews!: Table<ReviewRecord, number>
   sessions!: Table<SessionRecord, number>
   kv!: Table<{ key: string; value: unknown }, string>
+  events!: Table<EventRecord, number>
 
   constructor() {
     super('drum-coach')
@@ -42,6 +44,9 @@ class DrumDb extends Dexie {
       reviews: '++id, cardId, at, sessionId',
       sessions: '++id, startedAt',
       kv: 'key',
+    })
+    this.version(2).stores({
+      events: '++id, at, type, sessionId',
     })
   }
 }
@@ -57,15 +62,25 @@ export async function saveSettings(s: Settings): Promise<void> {
   await db.kv.put({ key: 'settings', value: s })
 }
 
-/** Full JSON backup of everything the user has done. */
-export async function exportAll(): Promise<string> {
-  const [cards, reviews, sessions, kv] = await Promise.all([
+/** Full JSON backup of everything the user has done, including the usage log. */
+export async function exportAll(meta: Record<string, unknown>): Promise<string> {
+  const [cards, reviews, sessions, kv, events] = await Promise.all([
     db.cards.toArray(),
     db.reviews.toArray(),
     db.sessions.toArray(),
     db.kv.toArray(),
+    db.events.toArray(),
   ])
-  return JSON.stringify({ app: 'drum-coach', version: 1, cards, reviews, sessions, kv })
+  return JSON.stringify({
+    app: 'drum-coach',
+    version: 2,
+    meta: { exportedAt: new Date().toISOString(), ...meta },
+    cards,
+    reviews,
+    sessions,
+    kv,
+    events,
+  })
 }
 
 export async function importAll(json: string): Promise<void> {
@@ -80,11 +95,18 @@ export async function importAll(json: string): Promise<void> {
       last_review: c.fsrs.last_review ? new Date(c.fsrs.last_review) : undefined,
     },
   }))
-  await db.transaction('rw', [db.cards, db.reviews, db.sessions, db.kv], async () => {
-    await Promise.all([db.cards.clear(), db.reviews.clear(), db.sessions.clear(), db.kv.clear()])
+  await db.transaction('rw', [db.cards, db.reviews, db.sessions, db.kv, db.events], async () => {
+    await Promise.all([
+      db.cards.clear(),
+      db.reviews.clear(),
+      db.sessions.clear(),
+      db.kv.clear(),
+      db.events.clear(),
+    ])
     await db.cards.bulkPut(cards)
     await db.reviews.bulkPut(data.reviews)
     await db.sessions.bulkPut(data.sessions)
     await db.kv.bulkPut(data.kv)
+    if (data.events) await db.events.bulkPut(data.events)
   })
 }

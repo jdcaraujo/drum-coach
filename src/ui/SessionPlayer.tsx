@@ -4,10 +4,11 @@ import { db } from '../db/dexie'
 import { exerciseById } from '../generators'
 import { Metronome } from '../audio/metronome'
 import { MicListener } from '../audio/mic'
-import { analyze, matchWindow, nearestOffsetMs } from '../audio/timingAnalysis'
+import { analyze, groupNotes, matchWindow, nearestOffsetMs } from '../audio/timingAnalysis'
+import { track, setTelemetrySession } from '../telemetry'
 import { newCard, rate } from '../srs/scheduler'
 import type { PlanItem } from '../srs/planner'
-import type { RatingName, TimingSummary } from '../model/card'
+import type { BpmChange, RatingName, TimingSummary } from '../model/card'
 import { HANDS } from '../model/exercise'
 import { LimbGrid } from './LimbGrid'
 import { TimingStrip } from './TimingStrip'
@@ -18,10 +19,12 @@ const RATINGS: RatingName[] = ['again', 'hard', 'good', 'easy']
 
 interface Props {
   plan: PlanItem[]
+  /** Where the session was started from, for the usage log */
+  source: 'today' | 'library'
   onExit: () => void
 }
 
-export function SessionPlayer({ plan, onExit }: Props) {
+export function SessionPlayer({ plan, source, onExit }: Props) {
   const { t, settings, cards, putCard, refresh } = useApp()
   const [queue, setQueue] = useState<PlanItem[]>(plan)
   const [idx, setIdx] = useState(0)
@@ -40,6 +43,18 @@ export function SessionPlayer({ plan, onExit }: Props) {
   const metro = useRef<Metronome | null>(null)
   const mic = useRef<MicListener | null>(null)
   const onsets = useRef<number[]>([])
+  const onsetLevels = useRef<number[]>([])
+  // Per-attempt facts for the review record and usage log
+  const attempt = useRef({
+    readyAt: Date.now(),
+    startAt: 0,
+    stopAt: 0,
+    startBpm: 0,
+    playedSec: 0,
+    loops: 0,
+    bpmChanges: [] as BpmChange[],
+    latencySource: 'device' as 'calibrated' | 'device',
+  })
   const latency = useRef(0)
   const raf = useRef(0)
   const startedAt = useRef(0)
@@ -52,12 +67,50 @@ export function SessionPlayer({ plan, onExit }: Props) {
   const ex = item ? exerciseById(item.exerciseId)! : null
   const card = item ? cards.get(item.exerciseId) : undefined
 
+  const created = useRef(false)
+
   useEffect(() => {
+    // Guard against React StrictMode running this twice in development
+    if (created.current) return
+    created.current = true
     db.sessions
       .add({ startedAt: sessionStart.current, plannedMinutes: settings.sessionMinutes, itemsDone: 0 })
-      .then((id) => (sessionId.current = id))
-    return () => stopAll()
+      .then((id) => {
+        sessionId.current = id
+        setTelemetrySession(id)
+        track('session_start', {
+          source,
+          plannedMinutes: settings.sessionMinutes,
+          plan: plan.map((p) => ({ id: p.exerciseId, mode: p.mode, bpm: p.bpm })),
+        })
+        logItemReady(0)
+      })
   }, [])
+
+  useEffect(
+    () => () => {
+      stopAll()
+      setTelemetrySession(undefined)
+    },
+    [],
+  )
+
+  // A fresh attempt starts whenever a new exercise comes up
+  useEffect(() => {
+    // The first item is logged once the session id exists
+    if (idx > 0) logItemReady(idx)
+  }, [idx])
+
+  function logItemReady(i: number) {
+    const it = queue[i]
+    if (!it) return
+    attempt.current = { ...attempt.current, readyAt: Date.now(), bpmChanges: [], playedSec: 0, loops: 0 }
+    track(
+      'item_ready',
+      { index: i, mode: it.mode, plannedBpm: it.bpm, cardRating: cards.get(it.exerciseId)?.lastRating ?? null },
+      it.exerciseId,
+    )
+  }
 
   function stopAll() {
     cancelAnimationFrame(raf.current)
@@ -82,7 +135,11 @@ export function SessionPlayer({ plan, onExit }: Props) {
     if (!metro.current) metro.current = new Metronome(ctx)
     latency.current =
       settings.latencyMs ?? Math.round(((ctx.outputLatency || 0) + (ctx.baseLatency || 0)) * 1000)
+    attempt.current.latencySource = settings.latencyMs !== null ? 'calibrated' : 'device'
+    attempt.current.startAt = Date.now()
+    attempt.current.startBpm = bpm
     onsets.current = []
+    onsetLevels.current = []
     setLive([])
     setTiming(null)
     setMicError(null)
@@ -92,6 +149,7 @@ export function SessionPlayer({ plan, onExit }: Props) {
         await mic.current.start(ctx, settings.micSensitivity, (o) => {
           const tCorr = o.time - latency.current / 1000
           onsets.current.push(tCorr)
+          onsetLevels.current.push(Math.round(o.level * 1000) / 1000)
           const m = metro.current!
           const recent = m.scheduled
             .filter((s) => s.n >= 0 && Math.abs(s.time - tCorr) < 0.3 && ex.steps[s.index].some((h) => HANDS.includes(h.limb)))
@@ -101,6 +159,7 @@ export function SessionPlayer({ plan, onExit }: Props) {
         })
       } catch (e) {
         setMicError((e as Error).message)
+        track('mic_error', { message: (e as Error).message }, ex.id)
       }
     }
     metro.current.start({
@@ -111,6 +170,22 @@ export function SessionPlayer({ plan, onExit }: Props) {
       gap: item.mode === 'gap' ? { play: 1, mute: 1 } : null,
     })
     startedAt.current = ctx.currentTime
+    track(
+      'play_start',
+      {
+        bpm,
+        mode: item.mode,
+        guide: guide && !micOn,
+        mic: micOn,
+        latencyMs: latency.current,
+        latencySource: attempt.current.latencySource,
+        outputLatencyMs: Math.round((ctx.outputLatency || 0) * 1000),
+        baseLatencyMs: Math.round((ctx.baseLatency || 0) * 1000),
+        sampleRate: ctx.sampleRate,
+        clickVolume: settings.clickVolume,
+      },
+      ex.id,
+    )
     try {
       wakeLock.current = await navigator.wakeLock?.request('screen')
     } catch {
@@ -129,22 +204,70 @@ export function SessionPlayer({ plan, onExit }: Props) {
     const m = metro.current!
     const stopTime = m.ctx.currentTime
     stopAll()
+    const played = m.scheduled.filter((s) => s.n >= 0 && s.time <= stopTime)
+    attempt.current.stopAt = Date.now()
+    attempt.current.playedSec = Math.round(Math.max(0, stopTime - m.playStart) * 10) / 10
+    attempt.current.loops = ex ? Math.floor(played.length / ex.steps.length) : 0
+    let summary: TimingSummary | null = null
     if (micOn && ex) {
-      const expected = m.scheduled
-        .filter((s) => s.n >= 0 && s.time <= stopTime - 0.05)
+      const notes = played
+        .filter((s) => s.time <= stopTime - 0.05)
         .filter((s) => ex.steps[s.index].some((h) => HANDS.includes(h.limb)))
-        .map((s) => s.time)
       const hits = onsets.current.filter((o) => o >= m.playStart - 0.1)
-      if (expected.length >= 4) setTiming(analyze(expected, hits, matchWindow(m.stepDur)).summary)
+      if (notes.length >= 4) {
+        const window = matchWindow(m.stepDur)
+        const result = analyze(
+          notes.map((s) => s.time),
+          hits,
+          window,
+        )
+        summary = {
+          ...result.summary,
+          detail: {
+            latencyMs: latency.current,
+            latencySource: attempt.current.latencySource,
+            windowMs: Math.round(window * 1000),
+            micSensitivity: settings.micSensitivity,
+            offsetsMs: result.offsetsMs.map(Math.round),
+            byStep: groupNotes(
+              notes.map((s) => s.index),
+              result.perNote,
+            ).map(({ key, ...g }) => ({ step: key, ...g })),
+            onsetLevels: onsetLevels.current,
+            byBar: groupNotes(
+              notes.map((s) => s.bar),
+              result.perNote,
+            ).map(({ key, ...g }) => ({ bar: key, ...g, muted: notes.find((s) => s.bar === key)!.muted })),
+          },
+        }
+        setTiming(summary)
+      }
     }
+    track(
+      'play_stop',
+      {
+        bpm,
+        playedSec: attempt.current.playedSec,
+        loops: attempt.current.loops,
+        bpmChanges: attempt.current.bpmChanges.length,
+        timing: summary ? { ...summary, detail: undefined } : null,
+      },
+      ex?.id,
+    )
     setPos({ n: -1, index: -1, muted: false })
     setPhase('rate')
   }
 
   function changeBpm(delta: number) {
     const v = Math.max(30, Math.min(260, bpm + delta))
+    const m = metro.current
+    const atSec =
+      phase === 'playing' && m ? Math.round((m.ctx.currentTime - m.playStart) * 10) / 10 : null
+    const change: BpmChange = { atSec, from: bpm, to: v }
+    attempt.current.bpmChanges.push(change)
+    track('bpm_change', { ...change, phase }, ex?.id)
     setBpm(v)
-    metro.current?.setBpm(v)
+    m?.setBpm(v)
   }
 
   async function onRate(r: RatingName) {
@@ -162,6 +285,8 @@ export function SessionPlayer({ plan, onExit }: Props) {
         setQueue((q) => [...q, { exerciseId: ex.id, mode: 'review', bpm: updated.bpm }])
       }
     }
+    const a = attempt.current
+    const decideSec = Math.round((now.getTime() - a.stopAt) / 100) / 10
     await db.reviews.add({
       cardId: ex.id,
       at: now.getTime(),
@@ -171,7 +296,19 @@ export function SessionPlayer({ plan, onExit }: Props) {
       durationSec,
       timing: timing ?? undefined,
       sessionId: sessionId.current ?? undefined,
+      plannedBpm: item.bpm,
+      startBpm: a.startBpm,
+      bpmChanges: a.bpmChanges,
+      playedSec: a.playedSec,
+      loops: a.loops,
+      readySec: Math.round((a.startAt - a.readyAt) / 100) / 10,
+      decideSec,
+      guide: guide && !micOn,
+      mic: micOn,
+      revealed,
+      queueIndex: idx,
     })
+    track('rate', { rating: r, bpm, mode: item.mode, decideSec, requeued: r === 'again' && item.mode !== 'warmup' }, ex.id)
     advance(done + 1)
   }
 
@@ -180,6 +317,12 @@ export function SessionPlayer({ plan, onExit }: Props) {
     if (sessionId.current) db.sessions.update(sessionId.current, { itemsDone: doneCount, endedAt: Date.now() })
     const next = idx + 1
     if (next >= queue.length) {
+      track('session_end', {
+        reason: 'completed',
+        itemsDone: doneCount,
+        queueLength: queue.length,
+        minutes: Math.round((Date.now() - sessionStart.current) / 6000) / 10,
+      })
       setPhase('done')
       refresh()
       return
@@ -192,7 +335,20 @@ export function SessionPlayer({ plan, onExit }: Props) {
     setPhase('ready')
   }
 
+  function skip() {
+    track('item_skip', { index: idx, mode: item?.mode, readySec: Math.round((Date.now() - attempt.current.readyAt) / 1000) }, item?.exerciseId)
+    advance(done)
+  }
+
   function endSession() {
+    track('session_end', {
+      reason: 'ended_early',
+      itemsDone: done,
+      index: idx,
+      queueLength: queue.length,
+      phase,
+      minutes: Math.round((Date.now() - sessionStart.current) / 6000) / 10,
+    })
     stopAll()
     if (sessionId.current) db.sessions.update(sessionId.current, { itemsDone: done, endedAt: Date.now() })
     refresh()
@@ -243,7 +399,10 @@ export function SessionPlayer({ plan, onExit }: Props) {
 
       <section className={`grid-wrap ${pos.muted ? 'muted-bar' : ''}`}>
         {hidden ? (
-          <button className="hidden-grid" onClick={() => setRevealed(true)}>
+          <button className="hidden-grid" onClick={() => {
+              setRevealed(true)
+              track('reveal', { atStep: pos.n, phase, mode: item.mode }, ex.id)
+            }}>
             <span>{t('player.hidden')}</span>
             <span className="btn ghost small">{t('player.reveal')}</span>
           </button>
@@ -295,16 +454,22 @@ export function SessionPlayer({ plan, onExit }: Props) {
           )}
           <div className="toggles">
             <label className="toggle">
-              <input type="checkbox" checked={guide} onChange={(e) => setGuide(e.target.checked)} disabled={micOn} />
+              <input type="checkbox" checked={guide} onChange={(e) => {
+                  setGuide(e.target.checked)
+                  track('toggle', { name: 'guide', value: e.target.checked }, ex.id)
+                }} disabled={micOn} />
               {t('player.guide')}
             </label>
             <label className="toggle">
-              <input type="checkbox" checked={micOn} onChange={(e) => setMicOn(e.target.checked)} />
+              <input type="checkbox" checked={micOn} onChange={(e) => {
+                  setMicOn(e.target.checked)
+                  track('toggle', { name: 'mic', value: e.target.checked }, ex.id)
+                }} />
               {t('player.mic')}
             </label>
           </div>
           <div className="actions">
-            <button className="btn ghost" onClick={() => advance(done)}>
+            <button className="btn ghost" onClick={skip}>
               {t('player.skip')}
             </button>
             <button className="btn primary big" onClick={start}>

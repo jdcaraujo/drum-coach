@@ -6,6 +6,9 @@ import { VitePWA } from 'vite-plugin-pwa'
 // BASE lets the same build serve from a sub-path (e.g. GitHub Pages: /drum-coach/)
 export default defineConfig({
   base: process.env.BASE ?? '/',
+  define: {
+    __BUILD__: JSON.stringify(`${new Date().toISOString().slice(0, 16)} ${process.env.GITHUB_SHA?.slice(0, 7) ?? 'local'}`),
+  },
   plugins: [
     react(),
     VitePWA({

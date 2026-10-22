@@ -13,12 +13,15 @@ export function matchWindow(minSpacingS: number): number {
  */
 export function analyze(expected: number[], onsets: number[], window: number): {
   offsetsMs: number[]
+  /** Per expected note (in time order): offset in ms, or null if missed */
+  perNote: Array<number | null>
   summary: TimingSummary
 } {
   const exp = [...expected].sort((a, b) => a - b)
   const hits = [...onsets].sort((a, b) => a - b)
   const used = new Array(hits.length).fill(false)
   const offsetsMs: number[] = []
+  const perNote: Array<number | null> = []
   let missed = 0
   let j = 0
   for (const e of exp) {
@@ -27,13 +30,17 @@ export function analyze(expected: number[], onsets: number[], window: number): {
     for (let k = j; k < hits.length && hits[k] <= e + window; k++) {
       if (!used[k] && (best < 0 || Math.abs(hits[k] - e) < Math.abs(hits[best] - e))) best = k
     }
-    if (best < 0) missed++
-    else {
+    if (best < 0) {
+      missed++
+      perNote.push(null)
+    } else {
       used[best] = true
-      offsetsMs.push((hits[best] - e) * 1000)
+      const off = (hits[best] - e) * 1000
+      offsetsMs.push(off)
+      perNote.push(off)
     }
   }
-  return { offsetsMs, summary: summarize(offsetsMs, missed, used.filter((u) => !u).length) }
+  return { offsetsMs, perNote, summary: summarize(offsetsMs, missed, used.filter((u) => !u).length) }
 }
 
 export function summarize(offsetsMs: number[], missed: number, extra: number): TimingSummary {
@@ -65,4 +72,25 @@ export function median(xs: number[]): number {
   const s = [...xs].sort((a, b) => a - b)
   const m = Math.floor(s.length / 2)
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
+}
+
+/** Group per-note results by a key (pattern step or bar) into hits / missed / mean offset. */
+export function groupNotes(
+  keys: number[],
+  perNote: Array<number | null>,
+): Array<{ key: number; hits: number; missed: number; meanMs: number }> {
+  const map = new Map<number, { hits: number; missed: number; sum: number }>()
+  keys.forEach((k, i) => {
+    const g = map.get(k) ?? { hits: 0, missed: 0, sum: 0 }
+    const off = perNote[i]
+    if (off === null || off === undefined) g.missed++
+    else {
+      g.hits++
+      g.sum += off
+    }
+    map.set(k, g)
+  })
+  return [...map.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([key, g]) => ({ key, hits: g.hits, missed: g.missed, meanMs: g.hits ? Math.round(g.sum / g.hits) : 0 }))
 }

@@ -146,6 +146,7 @@ export const en = {
   'set.sessionMinutes': 'Default session length',
   'set.backup': 'Backup',
   'set.export': 'Export data',
+  'set.exportHint': 'Includes a log of how you use the app (stays on your phone until you export it), so it can be improved.',
   'set.import': 'Import data',
   'set.imported': 'Backup restored.',
   'set.importFailed': 'Import failed: {msg}',

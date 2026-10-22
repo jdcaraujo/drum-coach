@@ -5,8 +5,14 @@ import { median } from './timingAnalysis'
 export type CalibrationMethod = 'loopback' | 'tap'
 
 export interface CalibrationResult {
-  latencyMs: number
+  /** Median delay, or null if too few clicks/taps were heard */
+  latencyMs: number | null
   samples: number
+  /** Every measured delay, ms */
+  diffsMs: number[]
+  /** Total onsets the mic detected during the test, including noise */
+  onsetCount: number
+  expected: number
 }
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -24,7 +30,7 @@ export async function calibrate(
   method: CalibrationMethod,
   sensitivity: number,
   onProgress?: (fraction: number) => void,
-): Promise<CalibrationResult | null> {
+): Promise<CalibrationResult> {
   const count = method === 'loopback' ? 10 : 20
   const interval = method === 'loopback' ? 0.6 : 60 / 90
   const skip = method === 'loopback' ? 0 : 4
@@ -46,8 +52,14 @@ export async function calibrate(
       const hit = onsets.find((o) => o >= t + window[0] && o <= t + window[1])
       if (hit !== undefined) diffs.push(hit - t)
     }
-    if (diffs.length < Math.ceil((count - skip) * 0.6)) return null
-    return { latencyMs: Math.round(median(diffs) * 1000), samples: diffs.length }
+    const enough = diffs.length >= Math.ceil((count - skip) * 0.6)
+    return {
+      latencyMs: enough ? Math.round(median(diffs) * 1000) : null,
+      samples: diffs.length,
+      diffsMs: diffs.map((d) => Math.round(d * 1000)),
+      onsetCount: onsets.length,
+      expected: count - skip,
+    }
   } finally {
     mic.stop()
   }

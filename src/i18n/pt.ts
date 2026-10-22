@@ -148,6 +148,7 @@ export const pt: Record<I18nKey, string> = {
   'set.sessionMinutes': 'Duração habitual da sessão',
   'set.backup': 'Cópia de segurança',
   'set.export': 'Exportar dados',
+  'set.exportHint': 'Inclui um registo de como usas a app (fica no telemóvel até exportares), para a podermos melhorar.',
   'set.import': 'Importar dados',
   'set.imported': 'Cópia restaurada.',
   'set.importFailed': 'Falhou a importação: {msg}',

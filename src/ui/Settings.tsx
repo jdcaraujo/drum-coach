@@ -3,6 +3,7 @@ import { useApp, getAudio } from '../state'
 import { exportAll, importAll } from '../db/dexie'
 import { calibrate } from '../audio/calibration'
 import type { CalibrationMethod } from '../audio/calibration'
+import { track, deviceInfo, BUILD } from '../telemetry'
 
 export function Settings() {
   const { t, settings, updateSettings, refresh } = useApp()
@@ -16,9 +17,17 @@ export function Settings() {
     try {
       const ctx = await getAudio()
       const r = await calibrate(ctx, method, settings.micSensitivity, (p) => setCalState({ method, progress: p }))
-      if (r) await updateSettings({ latencyMs: r.latencyMs })
+      track('calibration', {
+        method,
+        sensitivity: settings.micSensitivity,
+        previousMs: settings.latencyMs,
+        outputLatencyMs: Math.round((ctx.outputLatency || 0) * 1000),
+        ...r,
+      })
+      if (r.latencyMs !== null) await updateSettings({ latencyMs: r.latencyMs })
       else setMessage(t('set.calFailed'))
     } catch (e) {
+      track('calibration', { method, error: (e as Error).message })
       setMessage(t('player.micError', { msg: (e as Error).message }))
     } finally {
       setCalState(null)
@@ -26,7 +35,8 @@ export function Settings() {
   }
 
   async function doExport() {
-    const json = await exportAll()
+    track('export')
+    const json = await exportAll({ build: BUILD, device: deviceInfo() })
     const blob = new Blob([json], { type: 'application/json' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
@@ -38,6 +48,7 @@ export function Settings() {
   async function doImport(file: File) {
     try {
       await importAll(await file.text())
+      track('import', { bytes: file.size })
       await refresh()
       setMessage(t('set.imported'))
     } catch (e) {
@@ -147,6 +158,7 @@ export function Settings() {
 
       <section className="card">
         <h3>{t('set.backup')}</h3>
+        <p className="muted small">{t('set.exportHint')}</p>
         <div className="actions">
           <button className="btn ghost" onClick={doExport}>
             ⬇ {t('set.export')}

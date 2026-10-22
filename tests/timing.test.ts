@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyze, matchWindow, median, nearestOffsetMs } from '../src/audio/timingAnalysis'
+import { analyze, groupNotes, matchWindow, median, nearestOffsetMs } from '../src/audio/timingAnalysis'
 
 describe('timing analysis', () => {
   const step = 0.125 // 16ths at 120 BPM
@@ -38,5 +38,22 @@ describe('timing analysis', () => {
   it('median', () => {
     expect(median([5, 1, 3])).toBe(3)
     expect(median([4, 1, 3, 2])).toBe(2.5)
+  })
+})
+
+describe('per-note grouping', () => {
+  it('finds the weak second stroke of a double', () => {
+    // RRLL at 120 BPM 16ths: every second note of each double is missed
+    const step = 0.125
+    const expected = Array.from({ length: 16 }, (_, i) => 1 + i * step)
+    const onsets = expected.filter((_, i) => i % 2 === 0).map((t) => t + 0.01)
+    const { perNote } = analyze(expected, onsets, matchWindow(step))
+    const byStep = groupNotes(expected.map((_, i) => i % 4), perNote)
+    expect(byStep).toEqual([
+      { key: 0, hits: 4, missed: 0, meanMs: 10 },
+      { key: 1, hits: 0, missed: 4, meanMs: 0 },
+      { key: 2, hits: 4, missed: 0, meanMs: 10 },
+      { key: 3, hits: 0, missed: 4, meanMs: 0 },
+    ])
   })
 })

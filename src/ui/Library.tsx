@@ -5,6 +5,7 @@ import type { Exercise } from '../model/exercise'
 import { newCard, isDue } from '../srs/scheduler'
 import type { PlanItem } from '../srs/planner'
 import { LimbGrid } from './LimbGrid'
+import { track } from '../telemetry'
 
 export function Library({ onPractice }: { onPractice: (plan: PlanItem[]) => void }) {
   const { t, exercises, progress, cards, putCard } = useApp()
@@ -15,6 +16,7 @@ export function Library({ onPractice }: { onPractice: (plan: PlanItem[]) => void
   async function togglePin(ex: Exercise) {
     const c = cards.get(ex.id) ?? newCard(ex, now)
     await putCard({ ...c, pinned: !c.pinned })
+    track('pin', { pinned: !c.pinned, started: cards.has(ex.id) }, ex.id)
   }
 
   return (
@@ -27,7 +29,10 @@ export function Library({ onPractice }: { onPractice: (plan: PlanItem[]) => void
         const page = list[0]?.bookPage
         return (
           <section key={family} className={`stage ${p.unlocked ? '' : 'locked'}`}>
-            <button className="stage-head" onClick={() => setOpen(open === stage ? null : stage)} aria-expanded={open === stage}>
+            <button className="stage-head" onClick={() => {
+                if (open !== stage) track('stage_open', { stage, unlocked: p.unlocked })
+                setOpen(open === stage ? null : stage)
+              }} aria-expanded={open === stage}>
               <span className="stage-num">{stage + 1}</span>
               <span className="stage-title">
                 <strong>{t(`family.${family}`)}</strong>
@@ -50,7 +55,10 @@ export function Library({ onPractice }: { onPractice: (plan: PlanItem[]) => void
                     const isOpen = selected === ex.id
                     return (
                       <li key={ex.id} className={isOpen ? 'open' : ''}>
-                        <button className="ex-row" onClick={() => setSelected(isOpen ? null : ex.id)}>
+                        <button className="ex-row" onClick={() => {
+                            if (!isOpen) track('exercise_open', { stage, started: !!c }, ex.id)
+                            setSelected(isOpen ? null : ex.id)
+                          }}>
                           <span>
                             <strong>{exerciseTitle(ex, t)}</strong>
                             {sub && <span className="small muted"> + {sub}</span>}

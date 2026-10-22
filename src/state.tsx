@@ -8,6 +8,7 @@ import { allExercises } from './generators'
 import { stageProgress, highestUnlocked } from './srs/gating'
 import type { StageProgress } from './srs/gating'
 import { translator } from './i18n'
+import { track } from './telemetry'
 import type { T } from './i18n'
 
 interface AppState {
@@ -69,6 +70,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateSettings = useCallback(
     async (patch: Partial<Settings>) => {
       const next = { ...settings, ...patch }
+      for (const [key, value] of Object.entries(patch)) {
+        const from = settings[key as keyof Settings]
+        if (from !== value) track('setting_change', { key, from, to: value })
+      }
       setSettings(next)
       await saveSettings(next)
     },
